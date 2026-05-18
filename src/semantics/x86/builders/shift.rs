@@ -78,17 +78,71 @@ pub fn build(machine: Architecture, view: &InstructionDetailX86) -> Option<Seman
         effective_count.clone(),
         common::const_u64(0, bits),
     );
+    let is_shift = matches!(
+        op,
+        SemanticOperationBinary::Shl
+            | SemanticOperationBinary::LShr
+            | SemanticOperationBinary::AShr
+    );
+    let count_too_large = if is_shift {
+        common::compare(
+            SemanticOperationCompare::Uge,
+            effective_count.clone(),
+            common::const_u64(bits as u64, bits),
+        )
+    } else {
+        common::bool_const(false)
+    };
+    let guarded_shift_count = if is_shift {
+        SemanticExpression::Select {
+            condition: Box::new(count_too_large.clone()),
+            when_true: Box::new(common::const_u64(0, bits)),
+            when_false: Box::new(effective_count.clone()),
+            bits,
+        }
+    } else {
+        effective_count.clone()
+    };
     let shifted = SemanticExpression::Binary {
         op,
         left: Box::new(left.clone()),
-        right: Box::new(effective_count.clone()),
+        right: Box::new(guarded_shift_count.clone()),
         bits,
     };
-    let result = SemanticExpression::Select {
-        condition: Box::new(count_is_zero.clone()),
-        when_true: Box::new(left.clone()),
-        when_false: Box::new(shifted.clone()),
-        bits,
+    let result = if is_shift {
+        SemanticExpression::Select {
+            condition: Box::new(count_is_zero.clone()),
+            when_true: Box::new(left.clone()),
+            when_false: Box::new(SemanticExpression::Select {
+                condition: Box::new(count_too_large.clone()),
+                when_true: Box::new(common::const_u64(0, bits)),
+                when_false: Box::new(shifted.clone()),
+                bits,
+            }),
+            bits,
+        }
+    } else {
+        SemanticExpression::Select {
+            condition: Box::new(count_is_zero.clone()),
+            when_true: Box::new(left.clone()),
+            when_false: Box::new(shifted.clone()),
+            bits,
+        }
+    };
+    let nonzero_guarded_count = if is_shift {
+        SemanticExpression::Select {
+            condition: Box::new(SemanticExpression::Binary {
+                op: SemanticOperationBinary::Or,
+                left: Box::new(count_is_zero.clone()),
+                right: Box::new(count_too_large.clone()),
+                bits: 1,
+            }),
+            when_true: Box::new(common::const_u64(1, bits)),
+            when_false: Box::new(effective_count.clone()),
+            bits,
+        }
+    } else {
+        effective_count.clone()
     };
     let cf_computed = match op {
         SemanticOperationBinary::Shl => SemanticExpression::Extract {
@@ -98,7 +152,7 @@ pub fn build(machine: Architecture, view: &InstructionDetailX86) -> Option<Seman
                 right: Box::new(SemanticExpression::Binary {
                     op: SemanticOperationBinary::Sub,
                     left: Box::new(common::const_u64(bits as u64, bits)),
-                    right: Box::new(effective_count.clone()),
+                    right: Box::new(nonzero_guarded_count.clone()),
                     bits,
                 }),
                 bits,
@@ -113,7 +167,7 @@ pub fn build(machine: Architecture, view: &InstructionDetailX86) -> Option<Seman
                     left: Box::new(left.clone()),
                     right: Box::new(SemanticExpression::Binary {
                         op: SemanticOperationBinary::Sub,
-                        left: Box::new(effective_count.clone()),
+                        left: Box::new(nonzero_guarded_count.clone()),
                         right: Box::new(common::const_u64(1, bits)),
                         bits,
                     }),
@@ -147,11 +201,25 @@ pub fn build(machine: Architecture, view: &InstructionDetailX86) -> Option<Seman
         ),
         _ => common::bool_const(false),
     };
-    let of_expression = SemanticExpression::Select {
-        condition: Box::new(count_is_zero.clone()),
-        when_true: Box::new(common::flag_expr("of")),
-        when_false: Box::new(of_formula),
-        bits: 1,
+    let of_expression = if is_shift {
+        SemanticExpression::Select {
+            condition: Box::new(count_is_zero.clone()),
+            when_true: Box::new(common::flag_expr("of")),
+            when_false: Box::new(SemanticExpression::Select {
+                condition: Box::new(count_too_large.clone()),
+                when_true: Box::new(SemanticExpression::Undefined { bits: 1 }),
+                when_false: Box::new(of_formula),
+                bits: 1,
+            }),
+            bits: 1,
+        }
+    } else {
+        SemanticExpression::Select {
+            condition: Box::new(count_is_zero.clone()),
+            when_true: Box::new(common::flag_expr("of")),
+            when_false: Box::new(of_formula),
+            bits: 1,
+        }
     };
 
     let mut effects = vec![
@@ -161,11 +229,25 @@ pub fn build(machine: Architecture, view: &InstructionDetailX86) -> Option<Seman
         },
         SemanticEffect::Set {
             dst: common::flag("cf"),
-            expression: SemanticExpression::Select {
-                condition: Box::new(count_is_zero.clone()),
-                when_true: Box::new(common::flag_expr("cf")),
-                when_false: Box::new(cf_computed),
-                bits: 1,
+            expression: if is_shift {
+                SemanticExpression::Select {
+                    condition: Box::new(count_is_zero.clone()),
+                    when_true: Box::new(common::flag_expr("cf")),
+                    when_false: Box::new(SemanticExpression::Select {
+                        condition: Box::new(count_too_large.clone()),
+                        when_true: Box::new(SemanticExpression::Undefined { bits: 1 }),
+                        when_false: Box::new(cf_computed),
+                        bits: 1,
+                    }),
+                    bits: 1,
+                }
+            } else {
+                SemanticExpression::Select {
+                    condition: Box::new(count_is_zero.clone()),
+                    when_true: Box::new(common::flag_expr("cf")),
+                    when_false: Box::new(cf_computed),
+                    bits: 1,
+                }
             },
         },
         SemanticEffect::Set {
