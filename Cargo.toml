@@ -18,7 +18,7 @@ llvm-sys = { version = "221.0.1" }
 
 [dependencies]
 clap = { version = "4.5.27", features = ["derive"] }
-cookie = "0.22.0"
+cookie_store = "0.22.0"
 lief = "0.15.1"
 capstone = "0.12.0"
 object = "0.37.3"
