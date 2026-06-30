@@ -48,9 +48,9 @@ RUN python3 -m pip install --break-system-packages --no-cache-dir maturin[patche
 
 COPY . .
 
-RUN cargo run --manifest-path xtask/Cargo.toml
-
-RUN mkdir -p /tmp/binlex-wheels \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    mkdir -p /tmp/binlex-wheels \
     && python3 -m maturin build --manifest-path bindings/python/Cargo.toml --release --out /tmp/binlex-wheels
 
 FROM ${UBUNTU_IMAGE}

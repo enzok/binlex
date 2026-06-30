@@ -26,9 +26,9 @@ WORKDIR /app
 
 COPY . .
 
-RUN cargo run --manifest-path xtask/Cargo.toml
-
-RUN set -eux; \
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/root/.cargo/git \
+    set -eux; \
     cargo build --release -p binlex-web
 
 FROM ubuntu:24.04
